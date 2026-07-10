@@ -4,18 +4,67 @@ A conversational interface where users enter a stock ticker and receive
 a full multi-agent trading analysis report.
 """
 
+import contextlib
 import datetime
+import re
 import sys
 from pathlib import Path
 
 import streamlit as st
+from stockstats import wrap
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
+from tradingagents.dataflows.stockstats_utils import load_ohlcv
+from tradingagents.dataflows.symbol_utils import NoMarketDataError
 from tradingagents.default_config import DEFAULT_CONFIG
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 
 CRYPTO_SUFFIXES = ("-USD", "-USDT", "-USDC", "-BTC", "-ETH")
+
+# The decision-making agents (Trader, Portfolio Manager, Research Manager)
+# render their structured output to markdown with a stable "**Label**: value"
+# shape (see tradingagents/agents/schemas.py) — these values are extracted
+# straight from that markdown rather than re-running the LLM, so the charts
+# below always reflect exactly what the report says.
+_FIELD_RE_CACHE: dict[str, re.Pattern] = {}
+
+
+def _extract_field(text: str, label: str) -> str | None:
+    """Pull "**Label**: value" out of a rendered agent report, or None."""
+    if not text:
+        return None
+    pattern = _FIELD_RE_CACHE.setdefault(
+        label, re.compile(rf"\*\*{re.escape(label)}\*\*:\s*(.+)")
+    )
+    match = pattern.search(text)
+    return match.group(1).strip() if match else None
+
+
+def _extract_float_field(text: str, label: str) -> float | None:
+    value = _extract_field(text, label)
+    if not value:
+        return None
+    try:
+        return float(value.replace("$", "").replace(",", "").split()[0])
+    except ValueError:
+        return None
+
+
+def _extract_sentiment(sentiment_report: str) -> tuple[str, float, str] | None:
+    """Parse the SentimentReport header rendered by render_sentiment_report."""
+    if not sentiment_report:
+        return None
+    match = re.search(
+        r"\*\*Overall Sentiment:\*\*\s*\*\*([^*]+)\*\*\s*\(Score:\s*([\d.]+)/10\)",
+        sentiment_report,
+    )
+    if not match:
+        return None
+    band, score = match.group(1).strip(), float(match.group(2))
+    confidence_match = re.search(r"\*\*Confidence:\*\*\s*(\w+)", sentiment_report)
+    confidence = confidence_match.group(1) if confidence_match else "unknown"
+    return band, score, confidence
 
 
 def detect_asset_type(ticker: str) -> str:
@@ -100,6 +149,119 @@ def format_report(final_state: dict, ticker: str) -> str:
     return "\n\n".join(sections)
 
 
+def render_price_chart(ticker: str, trade_date: str, final_state: dict):
+    """Price chart with the trader's entry/stop and the PM's price target overlaid.
+
+    Returns the underlying OHLCV frame (or None if it couldn't be fetched) so
+    the caller can reuse it for the indicator dashboard without a second fetch.
+    """
+    entry_price = _extract_float_field(final_state.get("trader_investment_plan", ""), "Entry Price")
+    stop_loss = _extract_float_field(final_state.get("trader_investment_plan", ""), "Stop Loss")
+    price_target = _extract_float_field(final_state.get("final_trade_decision", ""), "Price Target")
+
+    try:
+        ohlcv = load_ohlcv(ticker, trade_date)
+    except NoMarketDataError:
+        return None
+    if ohlcv is None or ohlcv.empty:
+        return None
+
+    st.subheader("📊 Price Chart")
+    chart_df = ohlcv.tail(120).set_index("Date")[["Close"]].rename(columns={"Close": "Price"})
+    if entry_price:
+        chart_df["Entry"] = entry_price
+    if stop_loss:
+        chart_df["Stop Loss"] = stop_loss
+    if price_target:
+        chart_df["Target"] = price_target
+    st.line_chart(chart_df)
+
+    cols = st.columns(3)
+    cols[0].metric("Entry", f"${entry_price:,.2f}" if entry_price else "—")
+    cols[1].metric("Stop Loss", f"${stop_loss:,.2f}" if stop_loss else "—")
+    cols[2].metric("Target", f"${price_target:,.2f}" if price_target else "—")
+
+    return ohlcv
+
+
+def render_indicator_dashboard(ohlcv) -> None:
+    """RSI / MACD / moving-average dashboard computed from the same OHLCV frame."""
+    if ohlcv is None or ohlcv.empty:
+        return
+
+    df = wrap(ohlcv.copy())
+    for col in ("rsi", "macd", "macds", "macdh", "close_50_sma", "close_10_ema"):
+        df[col]  # noqa: B018 - triggers stockstats' lazy indicator computation
+    tail = df.tail(90)
+    latest = tail.iloc[-1]
+
+    st.subheader("📈 Indicator Dashboard")
+    cols = st.columns(3)
+    cols[0].metric("RSI (14)", f"{latest['rsi']:.1f}")
+    cols[1].metric("MACD", f"{latest['macd']:.3f}")
+    cols[2].metric("MACD Signal", f"{latest['macds']:.3f}")
+
+    price_cols = tail.set_index("Date")[["close", "close_50_sma", "close_10_ema"]].rename(
+        columns={"close": "Close", "close_50_sma": "50-day SMA", "close_10_ema": "10-day EMA"}
+    )
+    st.line_chart(price_cols)
+    st.line_chart(tail.set_index("Date")[["rsi"]].rename(columns={"rsi": "RSI (14)"}))
+    st.bar_chart(tail.set_index("Date")[["macdh"]].rename(columns={"macdh": "MACD Histogram"}))
+
+
+def render_sentiment_gauge(final_state: dict) -> None:
+    parsed = _extract_sentiment(final_state.get("sentiment_report", ""))
+    if not parsed:
+        return
+    band, score, confidence = parsed
+
+    st.subheader("🎯 Sentiment Gauge")
+    cols = st.columns([2, 1])
+    cols[0].progress(score / 10, text=f"{band} — {score:.1f}/10")
+    cols[1].metric("Confidence", confidence.capitalize())
+
+
+def render_decision_summary(final_state: dict, decision: str) -> None:
+    """Bull-vs-bear debate balance plus how the Research and Portfolio Managers ruled."""
+    debate = final_state.get("investment_debate_state") or {}
+    bull_words = len(debate.get("bull_history", "").split())
+    bear_words = len(debate.get("bear_history", "").split())
+
+    st.subheader("⚖️ Decision Summary")
+    if bull_words or bear_words:
+        st.caption("Debate balance (words argued by each side)")
+        st.bar_chart({"Bull": bull_words, "Bear": bear_words})
+
+    research_call = _extract_field(final_state.get("investment_plan", ""), "Recommendation")
+    cols = st.columns(3)
+    cols[0].metric("Research Manager", research_call or "—")
+    cols[1].metric("Portfolio Manager", _extract_field(final_state.get("final_trade_decision", ""), "Rating") or "—")
+    cols[2].metric("Final Signal", decision or "—")
+
+    position_sizing = _extract_field(final_state.get("trader_investment_plan", ""), "Position Sizing")
+    if position_sizing:
+        st.caption(f"**Suggested position size:** {position_sizing}")
+
+
+def render_visuals(ticker: str, trade_date: str, final_state: dict, decision: str) -> None:
+    """Render the report's visual layer: price/indicator charts, sentiment, decision summary.
+
+    Each block is independently best-effort: the price chart needs a live
+    OHLCV fetch and can fail (unsupported symbol, network hiccup), but that
+    must not hide the sentiment gauge or decision summary, which only need
+    data already in ``final_state``.
+    """
+    ohlcv = None
+    with contextlib.suppress(Exception):
+        ohlcv = render_price_chart(ticker, trade_date, final_state)
+    with contextlib.suppress(Exception):
+        render_indicator_dashboard(ohlcv)
+    with contextlib.suppress(Exception):
+        render_sentiment_gauge(final_state)
+    with contextlib.suppress(Exception):
+        render_decision_summary(final_state, decision)
+
+
 def run_analysis(ticker: str, trade_date: str, config: dict) -> tuple:
     """Run the TradingAgents pipeline and return the final state."""
     asset_type = detect_asset_type(ticker)
@@ -157,7 +319,18 @@ with st.sidebar:
 
     deep_model = st.text_input("Deep thinking model", value=default_deep)
     quick_model = st.text_input("Quick thinking model", value=default_quick)
-    debate_rounds = st.slider("Debate rounds", 1, 5, 1)
+    debate_rounds = st.slider(
+        "Debate rounds",
+        1,
+        2,
+        2,
+        help=(
+            "1 = opening statements only (Bull, Bear, then the Research "
+            "Manager's decision). 2 = opening statements plus a rebuttal round. "
+            "More rounds tend to repeat earlier points rather than add new "
+            "information, so this is capped at 2."
+        ),
+    )
 
     backend_url = None
     if llm_provider == "ollama":
@@ -274,6 +447,13 @@ if user_input and not st.session_state.running:
             report = format_report(final_state, ticker)
 
             status_placeholder.empty()
+
+            # Visuals are a bonus on top of the text report — a charting
+            # failure (e.g. no OHLCV data for this symbol) must not hide an
+            # otherwise-successful analysis.
+            with contextlib.suppress(Exception):
+                render_visuals(ticker, trade_date, final_state, decision)
+
             st.markdown(report)
 
             st.success(f"**Signal: {decision}**")
