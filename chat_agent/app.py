@@ -6,12 +6,15 @@ a full multi-agent trading analysis report.
 
 import contextlib
 import datetime
+import json
 import re
 import sys
 from pathlib import Path
+from urllib.parse import unquote
 
 import streamlit as st
 from stockstats import wrap
+from streamlit.components.v1 import html as components_html
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -71,6 +74,48 @@ def detect_asset_type(ticker: str) -> str:
     if ticker.upper().endswith(CRYPTO_SUFFIXES):
         return "crypto"
     return "stock"
+
+
+def _set_browser_cookie(name: str, value: str, days: int = 90) -> None:
+    """Persist a value in a cookie on the visitor's own browser (not the server).
+
+    Distinct from the ``api_key`` in ``st.session_state``: session state is
+    wiped whenever the session ends (tab closed, app redeployed), which is
+    exactly why the same key had to be re-entered on every visit. A cookie
+    survives that, while still never touching the server's environment and
+    never being visible to any other visitor — same security property as
+    session state, just persisted client-side instead of in-memory.
+
+    Streamlit renders each component in its own iframe, so this reaches into
+    ``window.parent.document`` to set the cookie on the actual top-level page.
+    """
+    max_age = days * 24 * 60 * 60
+    components_html(
+        f"""
+        <script>
+        (function() {{
+            const secure = window.parent.location.protocol === 'https:' ? '; Secure' : '';
+            window.parent.document.cookie =
+                {json.dumps(name)} + '=' + encodeURIComponent({json.dumps(value)}) +
+                '; path=/; max-age={max_age}; SameSite=Lax' + secure;
+        }})();
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
+
+
+def _clear_browser_cookie(name: str) -> None:
+    components_html(
+        f"""
+        <script>
+        window.parent.document.cookie = {json.dumps(name)} + '=; path=/; max-age=0; SameSite=Lax';
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
 
 
 def format_report(final_state: dict, ticker: str) -> str:
@@ -352,13 +397,55 @@ with st.sidebar:
         "openrouter": "OPENROUTER_API_KEY",
     }.get(llm_provider)
 
+    # Widget state for a provider's key field is dropped by Streamlit whenever
+    # that widget isn't rendered on a run (i.e. while viewing a different
+    # provider). st.context.cookies is also only a snapshot from the initial
+    # page load, so it won't see a cookie this same session just wrote via
+    # injected JS. This cache bridges both gaps for the life of the session;
+    # an actual page reload re-derives it from the browser's real cookies.
+    key_cache = st.session_state.setdefault("_local_key_cache", {})
+
     api_key = None
     if api_key_label:
+        cookie_name = f"ta_key_{llm_provider}"
+        widget_key = f"api_key_input_{llm_provider}"
+
+        if widget_key not in st.session_state:
+            if cookie_name not in key_cache:
+                key_cache[cookie_name] = unquote(st.context.cookies.get(cookie_name, ""))
+            st.session_state[widget_key] = key_cache[cookie_name]
+
+        def _forget_saved_key(widget_key=widget_key, cookie_name=cookie_name):
+            # Runs as an on_click callback (before the widget below is
+            # re-instantiated), which is the only safe time to overwrite a
+            # widget-bound session_state entry.
+            st.session_state[widget_key] = ""
+            st.session_state.setdefault("_local_key_cache", {})[cookie_name] = ""
+            st.session_state["_pending_cookie_clear"] = cookie_name
+
         api_key = st.text_input(
             f"{api_key_label}",
             type="password",
-            help="Set your API key here. It is stored only in your session.",
+            key=widget_key,
+            help=(
+                "Saved as a cookie on this device only — never on the server, "
+                "never visible to other visitors — so you don't have to "
+                "re-enter it every time you open the app."
+            ),
         )
+        if api_key:
+            st.button(
+                "Forget saved key",
+                key=f"forget_{llm_provider}",
+                on_click=_forget_saved_key,
+            )
+
+        pending_clear = st.session_state.pop("_pending_cookie_clear", None)
+        if pending_clear:
+            _clear_browser_cookie(pending_clear)
+        elif api_key:
+            key_cache[cookie_name] = api_key
+            _set_browser_cookie(cookie_name, api_key)
     else:
         st.caption("No API key required for this provider.")
     if api_key:
