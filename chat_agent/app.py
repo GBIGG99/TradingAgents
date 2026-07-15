@@ -421,7 +421,14 @@ with st.sidebar:
         "anthropic": ("claude-sonnet-4-6", "claude-haiku-4-5-20251001"),
         "google": ("gemini-2.5-pro", "gemini-2.5-flash"),
         "deepseek": ("deepseek-chat", "deepseek-chat"),
-        "groq": ("llama-3.3-70b-versatile", "llama-3.1-8b-instant"),
+        # Both deep and quick default to the same Groq model: this app's
+        # prompts (tool lists, indicator descriptions, growing conversation
+        # history) routinely exceed llama-3.1-8b-instant's free-tier
+        # per-minute token budget on Groq (a hard per-request ceiling — no
+        # amount of retrying fixes a request that's simply too large), which
+        # surfaced as HTTP 413 "Request too large" failures. 70b-versatile
+        # has enough headroom for this app's actual prompt sizes.
+        "groq": ("llama-3.3-70b-versatile", "llama-3.3-70b-versatile"),
         "openrouter": ("anthropic/claude-sonnet-4.6", "openai/gpt-5.4-mini"),
         "ollama": ("glm-4.7-flash:latest", "qwen3:latest"),
     }
