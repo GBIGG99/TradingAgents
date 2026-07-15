@@ -7,6 +7,7 @@ a full multi-agent trading analysis report.
 import contextlib
 import datetime
 import json
+import os
 import re
 import sys
 from pathlib import Path
@@ -116,6 +117,67 @@ def _clear_browser_cookie(name: str) -> None:
         height=0,
         width=0,
     )
+
+
+def _server_default_key(env_name: str) -> str | None:
+    """A key the app owner configured once (Streamlit Cloud's Secrets panel),
+    used automatically for every visitor so nobody has to bring their own.
+
+    Streamlit promotes top-level st.secrets entries into os.environ on load,
+    so this also transparently covers a plain env var set the same way
+    outside Streamlit Cloud (e.g. local dev, another host) — one check
+    handles both, and avoids st.secrets raising when no secrets.toml exists
+    at all (the common case for a visitor's own local checkout).
+    """
+    return os.environ.get(env_name) or None
+
+
+def _render_api_key_input(provider: str, api_key_label: str) -> str | None:
+    """Text input for a visitor's own key, persisted via a per-provider cookie.
+
+    Returns the entered key, or None. Reused both when a key is required
+    (no server default configured) and when it's an optional override (a
+    server default exists but a visitor wants to use a different provider
+    or a higher-tier key of their own).
+    """
+    key_cache = st.session_state.setdefault("_local_key_cache", {})
+    cookie_name = f"ta_key_{provider}"
+    widget_key = f"api_key_input_{provider}"
+
+    if widget_key not in st.session_state:
+        if cookie_name not in key_cache:
+            key_cache[cookie_name] = unquote(st.context.cookies.get(cookie_name, ""))
+        st.session_state[widget_key] = key_cache[cookie_name]
+
+    def _forget_saved_key(widget_key=widget_key, cookie_name=cookie_name):
+        # Runs as an on_click callback (before the widget below is
+        # re-instantiated), which is the only safe time to overwrite a
+        # widget-bound session_state entry.
+        st.session_state[widget_key] = ""
+        st.session_state.setdefault("_local_key_cache", {})[cookie_name] = ""
+        st.session_state["_pending_cookie_clear"] = cookie_name
+
+    api_key = st.text_input(
+        f"{api_key_label}",
+        type="password",
+        key=widget_key,
+        help=(
+            "Saved as a cookie on this device only — never on the server, "
+            "never visible to other visitors — so you don't have to "
+            "re-enter it every time you open the app."
+        ),
+    )
+    if api_key:
+        st.button("Forget saved key", key=f"forget_{provider}", on_click=_forget_saved_key)
+
+    pending_clear = st.session_state.pop("_pending_cookie_clear", None)
+    if pending_clear:
+        _clear_browser_cookie(pending_clear)
+    elif api_key:
+        key_cache[cookie_name] = api_key
+        _set_browser_cookie(cookie_name, api_key)
+
+    return api_key
 
 
 def format_report(final_state: dict, ticker: str) -> str:
@@ -345,8 +407,13 @@ with st.sidebar:
 
     llm_provider = st.selectbox(
         "LLM Provider",
-        ["openai", "anthropic", "google", "deepseek", "groq", "openrouter", "ollama"],
+        ["groq", "openai", "anthropic", "google", "deepseek", "openrouter", "ollama"],
         index=0,
+        help=(
+            "Groq is first because it's free and, once the app owner sets a "
+            "shared key, works with no setup on your end. Other providers "
+            "need your own key below."
+        ),
     )
 
     provider_models = {
@@ -397,57 +464,18 @@ with st.sidebar:
         "openrouter": "OPENROUTER_API_KEY",
     }.get(llm_provider)
 
-    # Widget state for a provider's key field is dropped by Streamlit whenever
-    # that widget isn't rendered on a run (i.e. while viewing a different
-    # provider). st.context.cookies is also only a snapshot from the initial
-    # page load, so it won't see a cookie this same session just wrote via
-    # injected JS. This cache bridges both gaps for the life of the session;
-    # an actual page reload re-derives it from the browser's real cookies.
-    key_cache = st.session_state.setdefault("_local_key_cache", {})
+    server_key = _server_default_key(api_key_label) if api_key_label else None
 
     api_key = None
-    if api_key_label:
-        cookie_name = f"ta_key_{llm_provider}"
-        widget_key = f"api_key_input_{llm_provider}"
-
-        if widget_key not in st.session_state:
-            if cookie_name not in key_cache:
-                key_cache[cookie_name] = unquote(st.context.cookies.get(cookie_name, ""))
-            st.session_state[widget_key] = key_cache[cookie_name]
-
-        def _forget_saved_key(widget_key=widget_key, cookie_name=cookie_name):
-            # Runs as an on_click callback (before the widget below is
-            # re-instantiated), which is the only safe time to overwrite a
-            # widget-bound session_state entry.
-            st.session_state[widget_key] = ""
-            st.session_state.setdefault("_local_key_cache", {})[cookie_name] = ""
-            st.session_state["_pending_cookie_clear"] = cookie_name
-
-        api_key = st.text_input(
-            f"{api_key_label}",
-            type="password",
-            key=widget_key,
-            help=(
-                "Saved as a cookie on this device only — never on the server, "
-                "never visible to other visitors — so you don't have to "
-                "re-enter it every time you open the app."
-            ),
-        )
-        if api_key:
-            st.button(
-                "Forget saved key",
-                key=f"forget_{llm_provider}",
-                on_click=_forget_saved_key,
-            )
-
-        pending_clear = st.session_state.pop("_pending_cookie_clear", None)
-        if pending_clear:
-            _clear_browser_cookie(pending_clear)
-        elif api_key:
-            key_cache[cookie_name] = api_key
-            _set_browser_cookie(cookie_name, api_key)
+    if server_key:
+        st.success("Using a shared key — no setup needed.", icon="✅")
+        with st.expander("Use your own key instead"):
+            api_key = _render_api_key_input(llm_provider, api_key_label)
+    elif api_key_label:
+        api_key = _render_api_key_input(llm_provider, api_key_label)
     else:
         st.caption("No API key required for this provider.")
+
     if api_key:
         st.session_state["api_key"] = api_key
     else:
