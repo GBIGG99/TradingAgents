@@ -407,12 +407,12 @@ with st.sidebar:
 
     llm_provider = st.selectbox(
         "LLM Provider",
-        ["groq", "openai", "anthropic", "google", "deepseek", "openrouter", "ollama"],
+        ["openrouter", "groq", "openai", "anthropic", "google", "deepseek", "ollama"],
         index=0,
         help=(
-            "Groq is first because it's free and, once the app owner sets a "
-            "shared key, works with no setup on your end. Other providers "
-            "need your own key below."
+            "OpenRouter is first — once the app owner sets a shared key, it "
+            "works with no setup on your end and gives access to a wide "
+            "range of models. Other providers need your own key below."
         ),
     )
 
