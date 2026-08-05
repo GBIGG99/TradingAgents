@@ -7,6 +7,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_stock_data,
     get_verified_market_snapshot,
 )
+from tradingagents.agents.utils.tool_call_retry import invoke_with_tool_retry
 
 
 def create_market_analyst(llm):
@@ -80,7 +81,7 @@ Write a very detailed and nuanced report of the trends you observe. Provide spec
 
         chain = prompt | llm.bind_tools(tools)
 
-        result = chain.invoke(state["messages"])
+        result = invoke_with_tool_retry(chain, state["messages"], "Market Analyst")
 
         report = ""
 

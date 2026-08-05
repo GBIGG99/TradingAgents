@@ -24,15 +24,27 @@ def create_bear_researcher(llm):
             else "Asset fundamentals report (may be unavailable for crypto)"
         )
 
-        prompt = f"""You are a Bear Analyst making the case against investing in the {target_label}. Your goal is to present a well-reasoned argument emphasizing risks, challenges, and negative indicators. Leverage the provided research and data to highlight potential downsides and counter bullish arguments effectively.
+        is_opening = not current_response
 
-Key points to focus on:
+        if is_opening:
+            turn_instruction = (
+                "This is your OPENING statement — the bull has not spoken yet. "
+                "State your strongest case in 3-5 focused points backed by specific "
+                "evidence (risks, competitive weaknesses, negative indicators). Do "
+                "not pad it with restated boilerplate; every sentence should carry "
+                "new information."
+            )
+        else:
+            turn_instruction = (
+                "This is your REBUTTAL. Do NOT restate your opening case. Respond "
+                "directly to the bull's specific points below, point by point, "
+                "exposing weaknesses or over-optimistic assumptions. Keep it tight "
+                "— a sharp rebuttal beats a long one."
+            )
 
-- Risks and Challenges: Highlight factors like market saturation, financial instability, or macroeconomic threats that could hinder the stock's performance.
-- Competitive Weaknesses: Emphasize vulnerabilities such as weaker market positioning, declining innovation, or threats from competitors.
-- Negative Indicators: Use evidence from financial data, market trends, or recent adverse news to support your position.
-- Bull Counterpoints: Critically analyze the bull argument with specific data and sound reasoning, exposing weaknesses or over-optimistic assumptions.
-- Engagement: Present your argument in a conversational style, directly engaging with the bull analyst's points and debating effectively rather than simply listing facts.
+        prompt = f"""You are a Bear Analyst making the case against investing in the {target_label}. Your goal is to present a well-reasoned argument emphasizing risks, challenges, and negative indicators.
+
+{turn_instruction}
 
 Resources available:
 
@@ -43,7 +55,7 @@ Latest world affairs news: {news_report}
 {fundamentals_label}: {fundamentals_report}
 Conversation history of the debate: {history}
 Last bull argument: {current_response}
-Use this information to deliver a compelling bear argument, refute the bull's claims, and engage in a dynamic debate that demonstrates the risks and weaknesses of investing in the {target_label}.
+Present your argument in a conversational style, but be concise — a debate transcript, not an essay.
 """ + get_language_instruction()
 
         response = llm.invoke(prompt)
