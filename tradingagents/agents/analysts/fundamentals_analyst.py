@@ -8,6 +8,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_instrument_context_from_state,
     get_language_instruction,
 )
+from tradingagents.agents.utils.tool_call_retry import invoke_with_tool_retry
 
 
 def create_fundamentals_analyst(llm):
@@ -54,7 +55,7 @@ def create_fundamentals_analyst(llm):
 
         chain = prompt | llm.bind_tools(tools)
 
-        result = chain.invoke(state["messages"])
+        result = invoke_with_tool_retry(chain, state["messages"], "Fundamentals Analyst")
 
         report = ""
 

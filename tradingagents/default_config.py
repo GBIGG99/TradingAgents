@@ -106,8 +106,13 @@ DEFAULT_CONFIG = _apply_env_overrides({
     # Output language for analyst reports and final decision
     # Internal agent debate stays in English for reasoning quality
     "output_language": "English",
-    # Debate and discussion settings
-    "max_debate_rounds": 1,
+    # Debate and discussion settings.
+    # max_debate_rounds=2 gives the bull/bear investment debate a fixed
+    # opening -> rebuttal -> Research Manager decision shape (each round is
+    # one Bull turn + one Bear turn; see ConditionalLogic.should_continue_debate).
+    # Additional rounds add little new signal for an investor reading the
+    # report, so this is capped rather than left open-ended.
+    "max_debate_rounds": 2,
     "max_risk_discuss_rounds": 1,
     "max_recur_limit": 100,
     # News / data fetching parameters
@@ -134,7 +139,7 @@ DEFAULT_CONFIG = _apply_env_overrides({
         "core_stock_apis": "yfinance",       # Options: alpha_vantage, yfinance
         "technical_indicators": "yfinance",  # Options: alpha_vantage, yfinance
         "fundamental_data": "yfinance",      # Options: alpha_vantage, yfinance
-        "news_data": "yfinance",             # Options: alpha_vantage, yfinance
+        "news_data": "yfinance",             # Options: alpha_vantage, yfinance, exa (needs EXA_API_KEY)
         "macro_data": "fred",                # Options: fred (needs FRED_API_KEY)
         "prediction_markets": "polymarket",  # Options: polymarket (keyless)
     },

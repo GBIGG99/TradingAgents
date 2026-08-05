@@ -183,6 +183,10 @@ class TradingAgentsGraph:
         if max_retries is not None and max_retries != "":
             kwargs["max_retries"] = _coerce_max_retries(max_retries)
 
+        api_key = self.config.get("api_key")
+        if api_key:
+            kwargs["api_key"] = api_key
+
         return kwargs
 
     def _create_tool_nodes(self) -> dict[str, ToolNode]:
