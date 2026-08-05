@@ -77,6 +77,64 @@ def detect_asset_type(ticker: str) -> str:
     return "stock"
 
 
+def inject_pwa_head() -> None:
+    """Add the PWA manifest and iOS "Add to Home Screen" meta tags so the app
+    can be installed to the home screen like a native app.
+
+    Streamlit renders each component in its own iframe, so this reaches into
+    ``window.parent.document`` to modify the actual top-level page — the
+    standard trick for injecting arbitrary <head> tags into a Streamlit app.
+    Guarded by a check for an existing manifest link so reruns don't
+    duplicate the tags.
+
+    No service worker: Streamlit's static-file mount lives at
+    ``/app/static/``, which caps a worker registered from there to that same
+    path — it could never control the actual app page, so it would be dead
+    weight. iOS Safari's "Add to Home Screen" (this app's target platform)
+    doesn't require one; only Chrome/Android's install-prompt banner does,
+    and that's out of reach without server-level control over the
+    ``Service-Worker-Allowed`` response header.
+    """
+    components_html(
+        """
+        <script>
+        (function() {
+            const doc = window.parent.document;
+            if (doc.querySelector('link[rel="manifest"]')) return;
+
+            const head = doc.head;
+
+            const manifestLink = doc.createElement('link');
+            manifestLink.rel = 'manifest';
+            manifestLink.href = 'app/static/manifest.json';
+            head.appendChild(manifestLink);
+
+            const appleIcon = doc.createElement('link');
+            appleIcon.rel = 'apple-touch-icon';
+            appleIcon.href = 'app/static/apple-touch-icon.png';
+            head.appendChild(appleIcon);
+
+            const metaTags = [
+                ['apple-mobile-web-app-capable', 'yes'],
+                ['apple-mobile-web-app-status-bar-style', 'black-translucent'],
+                ['apple-mobile-web-app-title', 'TradingAgents'],
+                ['mobile-web-app-capable', 'yes'],
+                ['theme-color', '#0E1117'],
+            ];
+            metaTags.forEach(function(pair) {
+                const meta = doc.createElement('meta');
+                meta.name = pair[0];
+                meta.content = pair[1];
+                head.appendChild(meta);
+            });
+        })();
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
+
+
 def _set_browser_cookie(name: str, value: str, days: int = 90) -> None:
     """Persist a value in a cookie on the visitor's own browser (not the server).
 
@@ -395,6 +453,7 @@ st.set_page_config(
     page_icon="📈",
     layout="wide",
 )
+inject_pwa_head()
 
 st.title("📈 TradingAgents Chat")
 st.caption(
