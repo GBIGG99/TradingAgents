@@ -15,7 +15,6 @@ from urllib.parse import unquote
 
 import streamlit as st
 from stockstats import wrap
-from streamlit.components.v1 import html as components_html
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -95,7 +94,7 @@ def inject_pwa_head() -> None:
     and that's out of reach without server-level control over the
     ``Service-Worker-Allowed`` response header.
     """
-    components_html(
+    st.iframe(
         """
         <script>
         (function() {
@@ -130,8 +129,8 @@ def inject_pwa_head() -> None:
         })();
         </script>
         """,
-        height=0,
-        width=0,
+        height=1,
+        width=1,
     )
 
 
@@ -149,7 +148,7 @@ def _set_browser_cookie(name: str, value: str, days: int = 90) -> None:
     ``window.parent.document`` to set the cookie on the actual top-level page.
     """
     max_age = days * 24 * 60 * 60
-    components_html(
+    st.iframe(
         f"""
         <script>
         (function() {{
@@ -160,20 +159,20 @@ def _set_browser_cookie(name: str, value: str, days: int = 90) -> None:
         }})();
         </script>
         """,
-        height=0,
-        width=0,
+        height=1,
+        width=1,
     )
 
 
 def _clear_browser_cookie(name: str) -> None:
-    components_html(
+    st.iframe(
         f"""
         <script>
         window.parent.document.cookie = {json.dumps(name)} + '=; path=/; max-age=0; SameSite=Lax';
         </script>
         """,
-        height=0,
-        width=0,
+        height=1,
+        width=1,
     )
 
 
