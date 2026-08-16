@@ -321,6 +321,15 @@ class OpenAIClient(BaseLLMClient):
             # only speaks Chat Completions, so keep Responses off there (#1024).
             if spec.use_responses_api and _is_native_openai_base_url(base_url):
                 llm_kwargs["use_responses_api"] = True
+
+            # OpenRouter fans a single model slug out across multiple upstream
+            # providers, and not all of them support tool calling — by default
+            # OpenRouter can still route a tool-bound request to one that
+            # doesn't, which 404s with "No endpoints found that support tool
+            # use". require_parameters restricts routing to providers that
+            # support whatever parameters (e.g. tools) are actually sent.
+            if self.provider == "openrouter":
+                llm_kwargs["extra_body"] = {"provider": {"require_parameters": True}}
         elif self.base_url:
             llm_kwargs["base_url"] = self.base_url
 
