@@ -469,8 +469,9 @@ with st.sidebar:
         index=0,
         help=(
             "OpenRouter is first — once the app owner sets a shared key, it "
-            "works with no setup on your end and gives access to a wide "
-            "range of models. Other providers need your own key below."
+            "works with no setup on your end, and its default models here "
+            "are free (the ':free' variants), so nobody pays anything to "
+            "run an analysis. Other providers need your own key below."
         ),
     )
 
@@ -487,7 +488,10 @@ with st.sidebar:
         # surfaced as HTTP 413 "Request too large" failures. 70b-versatile
         # has enough headroom for this app's actual prompt sizes.
         "groq": ("llama-3.3-70b-versatile", "llama-3.3-70b-versatile"),
-        "openrouter": ("anthropic/claude-sonnet-4.6", "openai/gpt-5.4-mini"),
+        # Free-tier (":free") OpenRouter models: $0 to run, no billing setup
+        # ever needed on the app owner's OpenRouter account. Both support
+        # tool calling, which this app relies on for every analyst.
+        "openrouter": ("deepseek/deepseek-chat-v3.1:free", "meta-llama/llama-3.3-70b-instruct:free"),
         "ollama": ("glm-4.7-flash:latest", "qwen3:latest"),
     }
     default_deep, default_quick = provider_models.get(
